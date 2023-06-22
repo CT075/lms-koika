@@ -5,3 +5,5 @@ project/
 target/
 timing.log
 timingInv.log
+.bloop
+.metals
