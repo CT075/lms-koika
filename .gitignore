@@ -2,7 +2,7 @@
 \#*\#
 headers/
 project/
-target/
+**/target/
 timing.log
 timingInv.log
 .bloop

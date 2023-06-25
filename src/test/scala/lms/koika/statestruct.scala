@@ -9,7 +9,7 @@ import lms.collection.mutable._
 
 @virtualize
 class StateStructTest extends TutorialFunSuite {
-  val under = "structdemo/"
+  val under = "structdemo_"
 
   val MAX_STEPS = 1000
   val NUM_REGS = 3
@@ -67,8 +67,8 @@ class StateStructTest extends TutorialFunSuite {
         }
       }
 
-    def go(prog: Prog, s: Rep[State]) =
-      run(prog, 0, Pointer(s))
+    def go(prog: Prog, s: Pointer[State]) =
+      run(prog, 0, s)
   }
 
   abstract class Driver[In: Manifest, Out: Manifest] extends DslDriverC[In,Out] {q =>
@@ -82,7 +82,7 @@ int main(int argc, char *argv[]) {
 }
 """
 
-    override val codegen = new DslGenC {
+    override val codegen = new DslGenC with CCodeGenStruct {
       val IR: q.type = q
 
       override def emitAll(
@@ -118,13 +118,14 @@ int main(int argc, char *argv[]) {
   }
 
   test("basic") {
-    val snippet = new Driver[Unit, Unit] with Interp {
+    val snippet = new Driver[Array[Int], Unit] with Interp {
       val prog = List(Add(r(0), r(0), r(0)), JumpZ(r(0),2))
-      def snippet(_arg: Rep[Unit]): Rep[Unit] = {
+      def snippet(initial_memory: Rep[Array[Int]]): Rep[Unit] = {
         val s = Pointer.local[State]
+        s.mem = initial_memory
         run(prog, 0, s)
       }
     }
-    check("basic", snippet.code)
+    check("basic", snippet.code, "c")
   }
 }
