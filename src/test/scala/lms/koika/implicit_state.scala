@@ -4,8 +4,7 @@ import lms.core._
 import lms.core.stub._
 import lms.collection.mutable._
 import lms.core.Backend._
-
-import java.io.{PrintStream}
+import lms.macros.SourceContext
 
 // FIXME: Currently, we do not thread the state through any generated
 // functions, which means the [state] variable is only in-scope for the main
@@ -53,6 +52,8 @@ trait CCodeGenState extends ExtendedCCodeGen {
   override def shallow(n: Node): Unit = n match {
     case n @ Node(s, "state_get", List(Const(name: String)), _) =>
       es"$stateVarName->$name"
+    case n @ Node(s, "state_init", List(Const(typeName: String)), _) =>
+      esln"struct $typeName *$stateVarName = calloc(1, sizeof(struct $typeName))"
     case _ => super.shallow(n)
   }
 }
@@ -120,12 +121,9 @@ class ImplicitStateTest extends TutorialFunSuite {
 
         scratch.v = unit(0)
 
-        /* gives error: [not found: value SourceContext], which doesn't make
-         * any sense. Maybe a macro problem?
-        for (i <- (0 until arg.length)) {
+        for (i <- (0 until 16): Rep[Range]) {
           scratch.v = scratch.v + arg(i)
         }
-        */
 
         scratch.v
       }
