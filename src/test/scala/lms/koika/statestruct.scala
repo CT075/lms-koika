@@ -118,12 +118,13 @@ int main(int argc, char *argv[]) {
   }
 
   test("basic") {
-    val snippet = new Driver[Array[Int], Unit] with Interp {
+    val snippet = new Driver[Array[Int], Array[Int]] with Interp {
       val prog = List(Add(r(0), r(0), r(0)), JumpZ(r(0),2))
-      def snippet(initial_memory: Rep[Array[Int]]): Rep[Unit] = {
+      def snippet(initial_memory: Rep[Array[Int]]): Rep[Array[Int]] = {
         val s = Pointer.local[State]
         s.mem = initial_memory
         run(prog, 0, s)
+        return s.mem
       }
     }
     check("basic", snippet.code, "c")
