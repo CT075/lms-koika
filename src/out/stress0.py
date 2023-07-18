@@ -9,65 +9,55 @@ import random
 # Instructions:
 # addi rd rs1 imm
 # add rd rs1 rs2
-# mul rd rs1 rs2
-# sub rd rs1 rs2
-# jumpnz rs1 imm
-# jumpneg rs1 imm
+# br rs1 tag
+# target tag
 
 # this file generates a random sequence of instructions
 # and writes it to a file. USed to stress test the processor
 
-MAXREGS = 9
+MAXREGS = 5
+BRANCHLIMIT = 200
 
 
 def genNinst(n: int):
-    MAXDEPTH = 5
-    ret = [f"addi {MAXREGS} {MAXREGS} {MAXDEPTH}"] + ["nop"] * (n-2)
+    num_branch_targets = n//10
+    ret = ["target entry",
+           f"addi {MAXREGS} {MAXREGS} {BRANCHLIMIT}"] + ["nop"] * (n-2)
+    targets = [f"target {i}" for i in range(num_branch_targets)]
 
-    branch_prelude = [f"jumpneg {MAXREGS} EXIT",
+    for i in range(num_branch_targets):
+        idx = random.randint(0, n-1)
+        while ret[idx] != "nop":
+            idx = random.randint(0, n-1)
+        ret[idx] = targets[i]
+    ret.append("target exit")
+
+    branch_prelude = [f"brneg {MAXREGS} exit",
                       f"addi {MAXREGS} {MAXREGS} -1"]
 
     i = 0
     while i < len(ret):
         if ret[i] == "nop":
             cmd = random.randint(0, 100)
-            if cmd <= 20:
+            if cmd <= 30:
                 rd = random.randint(1, MAXREGS-1)
                 rs1 = random.randint(1, MAXREGS-1)
                 rs2 = random.randint(1, MAXREGS-1)
                 ret[i] = f"add {rd} {rs1} {rs2}"
-            elif cmd <= 30:
+            elif cmd <= 80:
                 rd = random.randint(1, MAXREGS-1)
                 rs1 = random.randint(1, MAXREGS-1)
                 imm = random.randint(0, 2**16)
                 ret[i] = f"addi {rd} {rs1} {imm}"
-            elif cmd <= 40:
-                rd = random.randint(1, MAXREGS-1)
-                rs1 = random.randint(1, MAXREGS-1)
-                rs2 = random.randint(1, MAXREGS-1)
-                ret[i] = f"sub {rd} {rs1} {rs2}"
-            elif cmd <= 80:
-                rd = random.randint(1, MAXREGS-1)
-                rs1 = random.randint(1, MAXREGS-1)
-                rs2 = random.randint(1, MAXREGS-1)
-                ret[i] = f"mul {rd} {rs1} {rs2}"
             elif cmd <= 100:
-                # want to stay inside program
-                lower = -i + 1
-                upper = n - i - 1
-                target = random.randint(lower, upper)
+                target = random.randint(0, num_branch_targets-1)
                 reg = random.randint(1, MAXREGS-1)
-                branch_type = random.choice(['jumpnz', 'jumpneg'])
+                branch_type = random.choice(['brneg', 'brnez'])
                 ret[i] = f"{branch_type} {reg} {target}"
                 for ins in reversed(branch_prelude):
                     ret.insert(i, ins)
                     i += 1
         i += 1
-    # Replace EXIT with the proper imm value
-
-    for i, ins in enumerate(ret):
-        if ins.find("EXIT") != -1:
-            ret[i] = ins.replace("EXIT", str(len(ret) - i - 1))
     return ret
 
 
