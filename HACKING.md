@@ -17,11 +17,7 @@ $ git remote add <my-lms-clean> <my-lms-clean-url>
 Now, changes can be pushed to your fork of `lms-clean` via
 
 ```
-$ git subrepo push -r <my-lms-clean> [<optional branch>]
+$ git subrepo push -r <my-lms-clean> [-b <branch>]
 ```
 
-Note that you can also pull changes from this remote similarly via
-
-```
-$ git subrepo pull vendor/lms-clean -r <my-lms-clean> [-b <branch>]
-```
+From there, a pull request can be made from your remote to upstream as usual.
