@@ -4,9 +4,9 @@
 ; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
 ;
 [subrepo]
-	remote = git@github.com:TiarkRompf/lms-clean.git
-	branch = master
-	commit = f3338d3ab0ea74e90e44acfdbbda7912c249a7fc
-	parent = cce2d0168fe736f0635e1df041cddab227745f73
+	remote = lms-clean-cam
+	branch = subrepo-test
+	commit = c2c15bb97a5c80f9bd5dbfc1b099b42ce7a91f0f
+	parent = e676697bffa4450cf9d9d67058267e8474abfa68
 	method = merge
 	cmdver = 0.4.6
