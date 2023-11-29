@@ -15,6 +15,11 @@ import scala.annotation.StaticAnnotation
 import scala.reflect.macros.whitebox.Context
 import scala.util.matching.Regex
 
+// Issues:
+//   - Initialization
+//   - Vars
+//   - Struct mutability makes it very difficult to write correct stage-time code
+
 trait StructOps extends Base with ArrayOps {
   object StructOpsImpl {
     // TODO: do we need a better constraint on T?
@@ -40,34 +45,9 @@ object CStruct_Impl {
     a.tree match {
       case q"case class $name(..${fields: Seq[ValDef]})" =>
         val manifestName = internal.reificationSupport.freshTermName(name.toString+"Manifest")
+        val traitName = TypeName(name.toString+"Ops")
+        val implicitName = internal.reificationSupport.freshTypeName(name.toString+"OpsImpl")
         val fieldDecls = fields.map { f => q"""(${f.name.toString}, manifest[${f.tpt}])""" }
-        val res = c.Expr(q"""
-          case class $name(..$fields)
-          implicit val $manifestName = new RefinedManifest[$name] {
-            def fields: List[(String, Manifest[_])] = List(..$fieldDecls)
-            def runtimeClass = classOf[$name]
-            override def name = Some(${name.toString})
-          }
-        """)
-        res
-    }
-  }
-}
-
-object CStructOps_Impl {
-  import scala.reflect.runtime.universe._
-
-  def impl(c: Context)(annottees: c.Expr[Any]*): c.Expr[Any] = {
-    import c.universe._
-
-    val List(a) = annottees
-
-    a.tree match {
-      // It really sucks to have to reproduce all the fields. In theory, we
-      // could use reflection to pick up the fields by hand, but it leads to
-      // some extremely messy issues with compiler internals.
-      case q"abstract class $opsClassName[$cls](..${fields: Seq[ValDef]})" => {
-        val name = cls.name
         val getters = fields.map { f =>
           q"""def ${f.name}: Rep[${f.tpt}] =
             StructOpsImpl.readField[$name, ${f.tpt}](p, ${f.name.toString})"""
@@ -78,24 +58,27 @@ object CStructOps_Impl {
             StructOpsImpl.writeField[$name, ${f.tpt}](p, ${f.name.toString}, v)"""
         }
         val res = c.Expr(q"""
-          implicit class $opsClassName(p: Rep[$name]) {
-            ..$getters
-            ..$setters
+          case class $name(..$fields)
+          implicit val $manifestName = new RefinedManifest[$name] {
+            def fields: List[(String, Manifest[_])] = List(..$fieldDecls)
+            def runtimeClass = classOf[$name]
+            override def name = Some(${name.toString})
+          }
+
+          trait $traitName { q: StructOps =>
+            implicit class $implicitName(p: Rep[$name]) {
+              ..$getters
+              ..$setters
+            }
           }
         """)
-
         res
-      }
     }
   }
 }
 
 class CStruct extends StaticAnnotation {
   def macroTransform(annottees: Any*): Any = macro CStruct_Impl.impl
-}
-
-class CStructOps extends StaticAnnotation {
-  def macroTransform(annottees: Any*): Any = macro CStructOps_Impl.impl
 }
 
 trait CCodeGenStruct extends ExtendedCCodeGen {
