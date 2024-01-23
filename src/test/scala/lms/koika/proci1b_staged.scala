@@ -3,6 +3,9 @@ package lms.koika
 import lms.core.stub._
 import lms.core.virtualize
 import lms.macros.SourceContext
+import lms.macros.RefinedManifest
+
+import lms.collection.mutable._
 
 @virtualize
 class StagedProcInterp1bPC extends TutorialFunSuite {
@@ -97,7 +100,13 @@ class StagedProcInterp1bPC extends TutorialFunSuite {
 
   val DEBUG = true
 
-  trait Interp extends Dsl {
+  @CStruct
+  case class StateT
+    ( regs: Array[Int]
+    , timer: Int
+    )
+
+  trait Interp extends Dsl with StateTOps {
 
     abstract sealed class Instruction
     case class Add(rd: Reg, rs1: Reg, rs2: Reg) extends Instruction
