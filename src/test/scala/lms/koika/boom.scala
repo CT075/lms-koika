@@ -17,8 +17,11 @@ object RiscVStripped {
   case object Byte extends Size
   case object Short extends Size
   case object Word extends Size
-  case object UnsignedByte extends Size
-  case object UnsignedShort extends Size
+
+  // CR cam: Do we actually need dedicated sign handling?
+  abstract sealed class Signedness
+  case object Signed extends Signedness
+  case object Unsigned extends Signedness
 
   abstract sealed class Cmp
   case object Eq extends Cmp
@@ -32,8 +35,11 @@ object RiscVStripped {
   case class Add(rd: Reg, rs1: Reg, rs2: Reg) extends Instruction
   case class Addi(rd: Reg, rs1: Reg, imm: Int) extends Instruction
   case class Mul(rd: Reg, rs1: Reg, rs2: Reg) extends Instruction
-  case class Load(rd: Reg, rs: Reg, offs: Int, size: Size) extends Instruction
-  case class Store(rs1: Reg, offs: Int, rs2: Reg, size: Size) extends Instruction
+  // ldr_ rd, [rs, offs]
+  case class Load(size: Size, sign: Signedness, rd: Reg, rs: Reg, offs: Int) extends Instruction
+  // str_ rv, [rd, offs]
+  case class Store(size: Size, rd: Reg, offs: Int, rv: Reg) extends Instruction
+  case class B(cmp: Option[Cmp], rs1: Reg, rs2: Reg, offs: Int) extends Instruction
 }
 
 @virtualize
@@ -51,21 +57,188 @@ class BoomTests extends TutorialFunSuite {
       , write: Int
       )
 
-    // CR cam: Caches
+    // CR cam: Look more deeply into instruction decode. Do we need to track the
+    // actual word being read?
+    @CStruct
+    case class InstructionS
+      ( tag: Int
+      , v1: Int
+      , v2: Int
+      , v3: Int
+      )
+
+    // CR-soon cam: Can we generate these?
+    object InsTags {
+      private[this] var __c = 0;
+      private[this] def iota() = {
+        val result = __c
+        __c += 1
+        result
+      }
+      val add = iota;
+      val addi = iota;
+      val mul = iota;
+
+      val ldrb = iota;
+      val ldsb = iota;
+      val ldrh = iota;
+      val ldsh = iota;
+      val ldr = iota;
+
+      val strb = iota;
+      val strh = iota;
+      val str = iota;
+
+      val b = iota;
+      val beq = iota;
+      val bne = iota;
+      val blt = iota;
+      val bge = iota;
+      val bltu = iota;
+      val bgeu = iota;
+    }
+
+    import InsTags._
+
+    val noop = InstructionS(addi, 0, 0, 0)
+
+    def encodeInstruction(i: Instruction): InstructionS = i match {
+      case Add(rd: Reg, rs1: Reg, rs2: Reg) => InstructionS(add, rd.i, rs1.i, rs2.i)
+      case Addi(rd: Reg, rs1: Reg, imm: Int) => InstructionS(addi, rd.i, rs1.i, imm)
+      case Mul(rd: Reg, rs1: Reg, rs2: Reg) => InstructionS(mul, rd.i, rs1.i, rs2.i)
+      case Load(Byte, Unsigned, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldrb, rd.i, rs.i, offs)
+      case Load(Byte, Signed, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldsb, rd.i, rs.i, offs)
+      case Load(Short, Unsigned, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldrh, rd.i, rs.i, offs)
+      case Load(Short, Signed, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldsh, rd.i, rs.i, offs)
+      case Load(Word, _, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldr, rd.i, rs.i, offs)
+      case Store(Byte, rd: Reg, offs: Int, rv: Reg) => InstructionS(strb, rd.i, offs, rv.i)
+      case Store(Short, rd: Reg, offs: Int, rv: Reg) => InstructionS(strh, rd.i, offs, rv.i)
+      case Store(Word, rd: Reg, offs: Int, rv: Reg) => InstructionS(str, rd.i, offs, rv.i)
+      case B(None, rs1: Reg, rs2: Reg, offs: Int) => InstructionS(b, rs1.i, rs2.i, offs)
+      case B(Some(Eq), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(beq, rs1.i, rs2.i, offs)
+      case B(Some(Ne), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(bne, rs1.i, rs2.i, offs)
+      case B(Some(Lt), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(blt, rs1.i, rs2.i, offs)
+      case B(Some(Ge), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(bge, rs1.i, rs2.i, offs)
+      case B(Some(UnsignedLt), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(bltu, rs1.i, rs2.i, offs)
+      case B(Some(UnsignedGe), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(bgeu, rs1.i, rs2.i, offs)
+    }
+
+    // CR cam: reinstate caches
     // CR cam: superscalar fetching
+
+    // For simplicity, we assume that instruction packets have size one (in
+    // other words, that instruction fetch loads exactly one instruction at a
+    // time).
+
+    // CR-someday cam: The actual
+    @CStruct
+    case class BTBEntry
+      ( tag: Int
+      , valid: Boolean
+      , target: Int
+      )
+
+    trait BTBOps extends BTBEntryOps with ArrayOps
 
     @CStruct
     case class Frontend
-      ( stage: Int
+      ( btb: Array[BTBEntry]
+        // CR cam: this is basically Option[Int]
+      , fetchPCReady: Boolean
+      , fetchPC: Int
+        // The proper BOOM uses output queues. However, because we aren't doing
+        // superscalar packet fetch, we can get away with a simple `out` intead.
+      , instructionOutReady: Boolean
+      , instructionOut: InstructionS
+      , btbResponseReady: Boolean
+      , btbResponse: Int
+      , nextPCReady: Boolean
+      , nextPCOut: Int
+        // the final output of the frontend
+      , finalFetchReady: Boolean
+      , finalFetchOut: InstructionS
       )
+
+    // Because [StructOps] uses mutation under the hood and we don't expose any
+    // primitives for allocation, we need to be very careful about how the
+    // stages compose to avoid accidentally leaking information into a further
+    // stage.
+
+    trait FrontendInterp extends Dsl with FrontendOps with BTBOps {
+      val btbSize: Int
+
+      def stepF4(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
+        if (state.nextPCReady) {
+          out.fetchPC = state.nextPCOut
+          out.fetchPCReady = true
+        }
+        else {
+          out.fetchPC = state.fetchPC
+          out.fetchPCReady = state.fetchPCReady
+        }
+      }
+
+      // CR cam: write to the branch checker
+      def stepF3(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
+        if (state.btbResponseReady || state.instructionOutReady) {
+          out.nextPCOut = state.btbResponse
+          out.nextPCReady = true
+          out.finalFetchOut = state.instructionOut
+          out.finalFetchReady = true
+        }
+        else {
+          out.nextPCOut = state.nextPCOut
+          out.nextPCReady = state.nextPCReady
+          out.finalFetchOut = state.finalFetchOut
+          out.finalFetchReady = state.finalFetchReady
+        }
+      }
+
+      // If we were using proper queues for the output of icache and btb, this
+      // would be the enqueue stage
+      def stepF2(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
+        unit(())
+      }
+
+      def checkBTB(pc: Rep[Int], btb: Rep[Array[BTBEntry]], out: Rep[Frontend]): Rep[Unit] = {
+        for (i <- (0 until btbSize): Range) {
+          val entry: Rep[BTBEntry] = btb(i)
+          if (entry.valid && entry.tag == pc) {
+            out.btbResponse = entry.target
+            out.btbResponseReady = true
+            return unit(())
+          }
+        }
+
+        out.btbResponse = pc + 1
+        out.btbResponseReady = true
+      }
+
+      def stepF1
+        ( state: Rep[Frontend]
+        , instructionMemory: Rep[Array[InstructionS]]
+        , out: Rep[Frontend]
+        ): Rep[Unit]
+      = {
+        if (state.fetchPCReady) {
+          out.instructionOut = instructionMemory(state.fetchPC)
+          out.instructionOutReady = true
+          checkBTB(state.fetchPC, state.btb, out)
+        }
+        else {
+          out.instructionOut = state.instructionOut
+          out.instructionOutReady = state.instructionOutReady
+        }
+      }
+    }
 
     @CStruct
     case class State
       ( ticks: Int
+      , pc: Int
       , regFile: Array[Int]
-      , instructionMemory: Array[Instruction]
+      , instructionMemory: Array[InstructionS]
       , programMemory: Array[Int]
-      , fetchBuffer: Array[Instruction]
       )
 
     trait PortDsl extends Dsl with PortOps {
