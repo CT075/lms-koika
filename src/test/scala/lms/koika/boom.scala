@@ -50,13 +50,6 @@ class BoomTests extends TutorialFunSuite {
   object Naive {
     import RiscVStripped._
 
-    @CStruct
-    case class Port
-      ( initial: Int
-      , read: Int
-      , write: Int
-      )
-
     // CR cam: Look more deeply into instruction decode. Do we need to track the
     // actual word being read?
     @CStruct
@@ -102,25 +95,27 @@ class BoomTests extends TutorialFunSuite {
 
     val noop = InstructionS(addi, 0, 0, 0)
 
-    def encodeInstruction(i: Instruction): InstructionS = i match {
-      case Add(rd: Reg, rs1: Reg, rs2: Reg) => InstructionS(add, rd.i, rs1.i, rs2.i)
-      case Addi(rd: Reg, rs1: Reg, imm: Int) => InstructionS(addi, rd.i, rs1.i, imm)
-      case Mul(rd: Reg, rs1: Reg, rs2: Reg) => InstructionS(mul, rd.i, rs1.i, rs2.i)
-      case Load(Byte, Unsigned, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldrb, rd.i, rs.i, offs)
-      case Load(Byte, Signed, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldsb, rd.i, rs.i, offs)
-      case Load(Short, Unsigned, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldrh, rd.i, rs.i, offs)
-      case Load(Short, Signed, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldsh, rd.i, rs.i, offs)
-      case Load(Word, _, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldr, rd.i, rs.i, offs)
-      case Store(Byte, rd: Reg, offs: Int, rv: Reg) => InstructionS(strb, rd.i, offs, rv.i)
-      case Store(Short, rd: Reg, offs: Int, rv: Reg) => InstructionS(strh, rd.i, offs, rv.i)
-      case Store(Word, rd: Reg, offs: Int, rv: Reg) => InstructionS(str, rd.i, offs, rv.i)
-      case B(None, rs1: Reg, rs2: Reg, offs: Int) => InstructionS(b, rs1.i, rs2.i, offs)
-      case B(Some(Eq), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(beq, rs1.i, rs2.i, offs)
-      case B(Some(Ne), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(bne, rs1.i, rs2.i, offs)
-      case B(Some(Lt), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(blt, rs1.i, rs2.i, offs)
-      case B(Some(Ge), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(bge, rs1.i, rs2.i, offs)
-      case B(Some(UnsignedLt), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(bltu, rs1.i, rs2.i, offs)
-      case B(Some(UnsignedGe), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(bgeu, rs1.i, rs2.i, offs)
+    object InstructionOps {
+      def encode(i: Instruction): InstructionS = i match {
+        case Add(rd: Reg, rs1: Reg, rs2: Reg) => InstructionS(add, rd.i, rs1.i, rs2.i)
+        case Addi(rd: Reg, rs1: Reg, imm: Int) => InstructionS(addi, rd.i, rs1.i, imm)
+        case Mul(rd: Reg, rs1: Reg, rs2: Reg) => InstructionS(mul, rd.i, rs1.i, rs2.i)
+        case Load(Byte, Unsigned, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldrb, rd.i, rs.i, offs)
+        case Load(Byte, Signed, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldsb, rd.i, rs.i, offs)
+        case Load(Short, Unsigned, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldrh, rd.i, rs.i, offs)
+        case Load(Short, Signed, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldsh, rd.i, rs.i, offs)
+        case Load(Word, _, rd: Reg, rs: Reg, offs: Int) => InstructionS(ldr, rd.i, rs.i, offs)
+        case Store(Byte, rd: Reg, offs: Int, rv: Reg) => InstructionS(strb, rd.i, offs, rv.i)
+        case Store(Short, rd: Reg, offs: Int, rv: Reg) => InstructionS(strh, rd.i, offs, rv.i)
+        case Store(Word, rd: Reg, offs: Int, rv: Reg) => InstructionS(str, rd.i, offs, rv.i)
+        case B(None, rs1: Reg, rs2: Reg, offs: Int) => InstructionS(b, rs1.i, rs2.i, offs)
+        case B(Some(Eq), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(beq, rs1.i, rs2.i, offs)
+        case B(Some(Ne), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(bne, rs1.i, rs2.i, offs)
+        case B(Some(Lt), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(blt, rs1.i, rs2.i, offs)
+        case B(Some(Ge), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(bge, rs1.i, rs2.i, offs)
+        case B(Some(UnsignedLt), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(bltu, rs1.i, rs2.i, offs)
+        case B(Some(UnsignedGe), rs1: Reg, rs2: Reg, offs: Int) => InstructionS(bgeu, rs1.i, rs2.i, offs)
+      }
     }
 
     // CR cam: reinstate caches
@@ -157,105 +152,122 @@ class BoomTests extends TutorialFunSuite {
         // the final output of the frontend
       , finalFetchReady: Boolean
       , finalFetchOut: InstructionS
+      , finalFetchPC: Int
+      , done: Boolean
       )
 
-    // Because [StructOps] uses mutation under the hood and we don't expose any
-    // primitives for allocation, we need to be very careful about how the
-    // stages compose to avoid accidentally leaking information into a further
-    // stage.
+    @CStruct
+    case class ROBEntry
+      ( valid: Boolean
+      , busy: Boolean
+      , renames: Array[Int]
+      , pc: Int
+      )
 
-    trait FrontendInterp extends Dsl with FrontendOps with BTBOps {
-      val btbSize: Int
-
-      def stepF4(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
-        if (state.nextPCReady) {
-          out.fetchPC = state.nextPCOut
-          out.fetchPCReady = true
-        }
-        else {
-          out.fetchPC = state.fetchPC
-          out.fetchPCReady = state.fetchPCReady
-        }
-      }
-
-      // CR cam: write to the branch checker
-      def stepF3(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
-        if (state.btbResponseReady || state.instructionOutReady) {
-          out.nextPCOut = state.btbResponse
-          out.nextPCReady = true
-          out.finalFetchOut = state.instructionOut
-          out.finalFetchReady = true
-        }
-        else {
-          out.nextPCOut = state.nextPCOut
-          out.nextPCReady = state.nextPCReady
-          out.finalFetchOut = state.finalFetchOut
-          out.finalFetchReady = state.finalFetchReady
-        }
-      }
-
-      // If we were using proper queues for the output of icache and btb, this
-      // would be the enqueue stage
-      def stepF2(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
-        unit(())
-      }
-
-      def checkBTB(pc: Rep[Int], btb: Rep[Array[BTBEntry]], out: Rep[Frontend]): Rep[Unit] = {
-        for (i <- (0 until btbSize): Range) {
-          val entry: Rep[BTBEntry] = btb(i)
-          if (entry.valid && entry.tag == pc) {
-            out.btbResponse = entry.target
-            out.btbResponseReady = true
-            return unit(())
-          }
-        }
-
-        out.btbResponse = pc + 1
-        out.btbResponseReady = true
-      }
-
-      def stepF1
-        ( state: Rep[Frontend]
-        , instructionMemory: Rep[Array[InstructionS]]
-        , out: Rep[Frontend]
-        ): Rep[Unit]
-      = {
-        if (state.fetchPCReady) {
-          out.instructionOut = instructionMemory(state.fetchPC)
-          out.instructionOutReady = true
-          checkBTB(state.fetchPC, state.btb, out)
-        }
-        else {
-          out.instructionOut = state.instructionOut
-          out.instructionOutReady = state.instructionOutReady
-        }
-      }
-    }
+    @CStruct
+    case class ROB
+      ( entries: Array[ROBEntry]
+      , head: Int
+      , tail: Int
+      )
 
     @CStruct
     case class State
       ( ticks: Int
-      , pc: Int
+      , frontend: Frontend
       , regFile: Array[Int]
-      , instructionMemory: Array[InstructionS]
+      , rat: Array[Int]
       , programMemory: Array[Int]
       )
 
-    trait PortDsl extends Dsl with PortOps {
-      def flushPort(p: Rep[Port]): Rep[Unit] = {
-        p.write = p.initial
+    class BOOMRunner(program: Array[Instruction], btbSize: Int) {
+      // Because [StructOps] uses mutation under the hood and we don't expose any
+      // primitives for allocation, we need to be very careful about how the
+      // stages compose to avoid accidentally leaking information into a further
+      // stage. The ordering is very tricky, because the information flow graph
+      // is inherently cyclic (fetch->decode->execute->fetch).
+      //
+      // To ensure that stages don't inadvertently interfere with each other, the
+      // residue will keep two separate state structs, one "active" and one
+      // "upcoming", with the active state being (spiritually) read-only and
+      // the upcoming state being write-only. Then, at the end of each cycle,
+      // we swap the active and upcoming states.
+
+      trait FrontendInterp extends Dsl with FrontendOps with BTBOps {
+        def stepF4(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
+          if (state.nextPCReady) {
+            out.fetchPC = state.nextPCOut
+            out.fetchPCReady = true
+          }
+          else {
+            out.fetchPC = state.fetchPC
+            out.fetchPCReady = state.fetchPCReady
+          }
+        }
+
+        // CR cam: write to the branch checker
+        def stepF3(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
+          if (state.btbResponseReady || state.instructionOutReady) {
+            out.nextPCOut = state.btbResponse
+            out.nextPCReady = true
+            out.finalFetchOut = state.instructionOut
+            out.finalFetchPC = state.fetchPC
+            out.finalFetchReady = true
+          }
+          else {
+            out.nextPCOut = state.nextPCOut
+            out.nextPCReady = state.nextPCReady
+            out.finalFetchOut = state.finalFetchOut
+            out.finalFetchReady = state.finalFetchReady
+          }
+        }
+
+        // If we were using proper queues for the output of icache and btb, this
+        // would be the enqueue stage
+        def stepF2(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
+          unit(())
+        }
+
+        def checkBTB(pc: Rep[Int], btb: Rep[Array[BTBEntry]], out: Rep[Frontend]): Rep[Unit] = {
+          for (i <- (0 until btbSize): Range) {
+            val entry: Rep[BTBEntry] = btb(i)
+            if (entry.valid && entry.tag == pc) {
+              out.btbResponse = entry.target
+              out.btbResponseReady = true
+              return unit(())
+            }
+          }
+
+          out.btbResponse = pc + 1
+          out.btbResponseReady = true
+        }
+
+        def stepF1(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
+          if (state.fetchPCReady) {
+            if (state.fetchPC >= program.length || state.fetchPC < 0) {
+              out.done = true
+            }
+            else {
+              // program unroll.
+              // CR cam: this makes the residue impossible to analyze
+              for (i <- (0 until program.length): Range) {
+                if (i == state.fetchPC) {
+                  out.instructionOut = InstructionOps.encode(program(i))
+                  out.instructionOutReady = true
+                  checkBTB(state.fetchPC, state.btb, out)
+                }
+              }
+            }
+          }
+          else {
+            out.instructionOut = state.instructionOut
+            out.instructionOutReady = state.instructionOutReady
+          }
+        }
       }
 
-      def freezePort(p: Rep[Port]): Rep[Unit] = {
-        p.write = p.read
+      trait ReorderOps extends Dsl with ROBEntryOps with ROBOps with ArrayOps {
       }
-
-      def updatePort(p: Rep[Port]): Rep[Unit] = {
-        p.read = p.write
-      }
-    }
-
-    trait InterpDsl extends PortDsl with StateOps {
     }
   }
 }
