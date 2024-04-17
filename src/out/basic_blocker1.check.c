@@ -11,6 +11,7 @@ struct StateT x3(struct StateT);
 struct StateT x5(struct StateT);
 struct StateT x7(struct StateT);
 /*********** Datastructures ***********/
+struct StateT;
 struct StateT {
   int* regs;
   int* mem;

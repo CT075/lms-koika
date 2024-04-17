@@ -9,6 +9,9 @@ import lms.core.utils.time
 import lms.macros.SourceContext
 import lms.macros.RefinedManifest
 
+import java.io.{PrintStream, StringWriter, PrintWriter}
+
+import scala.collection.mutable
 
 import language.experimental.macros
 import scala.annotation.StaticAnnotation
@@ -79,25 +82,40 @@ class CStruct extends StaticAnnotation {
 }
 
 trait CCodeGenStruct extends ExtendedCCodeGen {
-  override def registerDatastructures(id: String)(f: => Unit): Unit =
-    if (!registeredDatastructures(id)) {
-      if (ongoingData) ???
-      ongoingData = true
-      registeredDatastructures += id
-      withStream(datastructuresWriter)(f)
-      ongoingData = false
+  protected val registeredStructs = mutable.HashMap[String, String]()
+
+  def registerStruct(name: String, emitDefn: String): Unit =
+    if (!registeredStructs.contains(name)) {
+      registeredStructs += (name -> emitDefn)
     }
 
   override def record(man: RefinedManifest[_]): String = {
     val tpe = "struct " + man.toString
-    registerDatastructures(tpe) {
-      emit(tpe); emitln(" {")
-      man.fields.foreach {
-        case (name, man) => emitln(remap(man) + " " + name + ";")
-      }
-      emitln("};")
+    val writer = new StringWriter()
+    val d = new PrintWriter(writer)
+
+    d.print(tpe); d.println(" {")
+    man.fields.foreach {
+      case (name, man) => d.println(remap(man) + " " + name + ";")
     }
+    d.println("};")
+
+    registerStruct(tpe, writer.toString())
+
     tpe
+  }
+
+  override def emitDatastructures(out: PrintStream): Unit = {
+    if (datastructuresStream.size > 0 || registeredStructs.size > 0) {
+      out.println("\n/*********** Datastructures ***********/")
+      for ((name, _) <- registeredStructs) {
+        emit(name); emitln(";")
+      }
+      for ((_, defn) <- registeredStructs) {
+        emitln(defn);
+      }
+      datastructuresStream.writeTo(out)
+    }
   }
 
   override def traverse(n: Node): Unit = n match {

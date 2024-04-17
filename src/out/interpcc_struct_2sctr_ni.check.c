@@ -6,6 +6,7 @@ Emitting C Generated Code
 #include <stdint.h>
 #include <stdbool.h>
 /*********** Datastructures ***********/
+struct stateT;
 struct stateT {
   int* regs;
   int* saved_regs;
