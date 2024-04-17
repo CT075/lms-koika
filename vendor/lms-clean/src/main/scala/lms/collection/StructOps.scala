@@ -79,6 +79,27 @@ class CStruct extends StaticAnnotation {
 }
 
 trait CCodeGenStruct extends ExtendedCCodeGen {
+  override def registerDatastructures(id: String)(f: => Unit): Unit =
+    if (!registeredDatastructures(id)) {
+      if (ongoingData) ???
+      ongoingData = true
+      registeredDatastructures += id
+      withStream(datastructuresWriter)(f)
+      ongoingData = false
+    }
+
+  override def record(man: RefinedManifest[_]): String = {
+    val tpe = "struct " + man.toString
+    registerDatastructures(tpe) {
+      emit(tpe); emitln(" {")
+      man.fields.foreach {
+        case (name, man) => emitln(remap(man) + " " + name + ";")
+      }
+      emitln("};")
+    }
+    tpe
+  }
+
   override def traverse(n: Node): Unit = n match {
     case n @ Node(s, "reffield_set", List(ptr, Const(field: String), v), _) =>
       shallowP(ptr, precedence("reffield_get"))
