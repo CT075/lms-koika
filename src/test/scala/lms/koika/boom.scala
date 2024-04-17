@@ -103,48 +103,82 @@ class BoomTests extends TutorialFunSuite {
     trait BTBOps extends BTBEntryOps with ArrayOps
 
     @CStruct
+    case class PendingBranch
+      ( pc: Int
+      , valid: Boolean
+      , target: Int
+      )
+
+    @CStruct
     case class Frontend
       ( btb: Array[BTBEntry]
-      , stalled: Boolean
       , fetchPCReady: Boolean
       , fetchPC: Int
-      , instructionOutReady: Boolean
+      , instructionReady: Boolean
       , instructionOut: InstructionS
-      , btbResponseReady: Boolean
-      , btbResponse: Int
-      , nextPCReady: Boolean
-      , nextPCOut: Int
-        // the final output of the frontend
-      , finalFetchReady: Boolean
-      , finalFetchOut: InstructionS
-      , finalFetchPC: Int
+      , pendingBranchList: Array[PendingBranch]
+      , pcOut: Int
+      )
+
+    // CR cam: OOO and renaming doesn't work yet
+    @CStruct
+    case class Scheduler
+      ( enqueued: InstructionS
+      , ready: Boolean
+      )
+
+    @CStruct
+    case class ALU
+      ( uop: Int
+      , vl: Int
+      , vr: Int
+      , waitCtr: Int
       , done: Boolean
+      , result: Int
       )
 
     @CStruct
-    case class ROBEntry
-      ( valid: Boolean
-      , busy: Boolean
-      , renames: Array[Int]
-      , pc: Int
+    case class MemoryUnit
+      ( requestedAddr: Int
+      , writeRequested: Boolean
+      , bus: Int
+        // simulates taking multiple cycles to load or store
+      , waitCtr: Int
+      , done: Boolean
+      , output: Int
       )
 
-    @CStruct
-    case class ROB
-      ( entries: Array[ROBEntry]
-      , head: Int
-      , tail: Int
-      , free: Array[Int]
-      , freeHead: Int
-      , freeTail: Int
-      )
-
+    // The true BOOM pipeline has a pretty complex interleaved execution/commit
+    // pipeline that involves a series of abstract (possibly themselves-pipelined)
+    // execution units. We will make a simplifying assumption that there is
+    // one dedicated ALU (used for register math) and that branch target
+    // resolution/memory addressing is free.
     @CStruct
     case class State
       ( frontend: Frontend
+      , scheduler: Scheduler
+      , mu: MemoryUnit
+      , alu: ALU
       , regFile: Array[Int]
       , memory: Array[Int]
+      , destReg: Int
+        // This pc is the pc of the instruction being executed (in other words,
+        // the instruction immediately before the point of no return).
+      , pc: Int
+      , ticks: Int
       )
+
+    trait DslUtil extends Dsl {
+      def member(needle: Rep[Int], haystack: Int*): Rep[Boolean] = {
+        for (i <- haystack) {
+          if (unit(i) == needle) {
+            return unit(true)
+          }
+        }
+
+        return unit(false)
+      }
+    }
 
     class BOOMRunner
       ( program: Array[Instruction]
@@ -152,6 +186,7 @@ class BoomTests extends TutorialFunSuite {
       , numArchRegs: Int
       , numPhysRegs: Int
       , memSize: Int
+      , limit: Int
       )
     {
       // Because [StructOps] uses mutation under the hood and we don't expose any
@@ -160,86 +195,31 @@ class BoomTests extends TutorialFunSuite {
       // stage. The ordering is very tricky, because the information flow graph
       // is inherently cyclic (fetch->decode->execute->fetch).
 
-      trait ProcDsl extends Dsl
+      // With a 4-cycle fetch, I'm pretty sure it's impossible to be under
+      // more than 4 branches at once. But this is not a "real" chip so it is
+      // probably cheap to just allocate twice as many slots in the branch
+      // checker.
+      val numSpeculativeBranches = 8
+
+      trait FrontDsl extends DslUtil
         with FrontendOps
         with BTBOps
+        with InstructionSOps
+        with PendingBranchOps
 
-      trait FrontendInterp extends ProcDsl {
-        def stepF4(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
-          if (state.nextPCReady) {
-            out.fetchPC = state.nextPCOut
-            out.fetchPCReady = true
-          }
-          else {
-            out.fetchPC = state.fetchPC
-            out.fetchPCReady = state.fetchPCReady
-          }
-        }
-
-        // CR cam: write to the branch checker
-        def stepF3(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
-          if (state.btbResponseReady || state.instructionOutReady) {
-            out.nextPCOut = state.btbResponse
-            out.nextPCReady = true
-            out.finalFetchOut = state.instructionOut
-            out.finalFetchPC = state.fetchPC
-            out.finalFetchReady = true
-          }
-          else {
-            out.nextPCOut = state.nextPCOut
-            out.nextPCReady = state.nextPCReady
-            out.finalFetchOut = state.finalFetchOut
-            out.finalFetchReady = state.finalFetchReady
-          }
-        }
-
-        // If we were using proper queues for the output of icache and btb, this
-        // would be the enqueue stage
-        def stepF2(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
-          unit(())
-        }
-
-        def checkBTB(pc: Rep[Int], btb: Rep[Array[BTBEntry]], out: Rep[Frontend]): Rep[Unit] = {
+      trait InterpFrontend extends FrontDsl {
+        def queryBTB(state: Rep[Frontend]): Rep[Int] = {
           for (i <- (0 until btbSize): Range) {
-            val entry: Rep[BTBEntry] = btb(i)
-            if (entry.valid && entry.tag == pc) {
-              out.btbResponse = entry.target
-              out.btbResponseReady = true
-              return unit(())
+            val entry: Rep[BTBEntry] = state.btb(i)
+            if (entry.valid && entry.tag == state.fetchPC) {
+              return entry.target
             }
           }
 
-          out.btbResponse = pc + 1
-          out.btbResponseReady = true
+          return state.fetchPC+1
         }
 
-        def stepF1(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
-          if (state.fetchPCReady) {
-            if (state.fetchPC >= program.length || state.fetchPC < 0) {
-              out.done = true
-            }
-            else {
-              // program unroll.
-              for (i <- (0 until program.length): Range) {
-                if (i == state.fetchPC) {
-                  out.instructionOut = InstructionOps.encode(program(i))
-                  out.instructionOutReady = true
-                  checkBTB(state.fetchPC, state.btb, out)
-                }
-              }
-            }
-          }
-          else {
-            out.instructionOut = state.instructionOut
-            out.instructionOutReady = state.instructionOutReady
-          }
-        }
-
-        def runF1(state: Rep[Frontend]): (Rep[Boolean], Rep[Boolean], Rep[InstructionS]) = {
-          var done = __newVar(true)
-          var ready = __newVar(false)
-          var result = __newVar(noop)
-
+        def loadInstr(state: Rep[Frontend]): (Rep[Boolean], Rep[Boolean], Rep[InstructionS]) = {
           if (state.fetchPCReady) {
             if (state.fetchPC >= program.length || state.fetchPC < 0) {
               return (unit(true), unit(false), unit(noop))
@@ -247,10 +227,7 @@ class BoomTests extends TutorialFunSuite {
             else {
               for (i <- (0 until program.length): Range) {
                 if (i == state.fetchPC) {
-                  done = false
-                  ready = true
-                  result = InstructionOps.encode(program(i))
-                  //checkBTB(state.fetchPC, state.btb, out)
+                  return (unit(false), unit(true), unit(InstructionOps.encode(program(i))))
                 }
               }
             }
@@ -259,97 +236,254 @@ class BoomTests extends TutorialFunSuite {
             return (unit(false), unit(false), unit(noop))
           }
 
-          (done, ready, result)
+          (unit(true), unit(false), unit(noop))
         }
 
-        def step(state: Rep[Frontend], out: Rep[Frontend]): Rep[Unit] = {
-          if (state.stalled) {
-            out.btb = state.btb
-            out.stalled = state.stalled
-            out.fetchPCReady = state.fetchPCReady
-            out.fetchPC = state.fetchPC
-            out.instructionOutReady = state.instructionOutReady
-            out.instructionOut = state.instructionOut
-            out.btbResponseReady = state.btbResponseReady
-            out.btbResponse = state.btbResponse
-            out.nextPCReady = state.nextPCReady
-            out.nextPCOut = state.nextPCOut
-            out.finalFetchReady = state.finalFetchReady
-            out.finalFetchOut = state.finalFetchOut
-            out.finalFetchPC = state.finalFetchPC
-            out.done = state.done
-          }
-          else {
-            stepF1(state, out)
-            stepF2(state, out)
-            stepF3(state, out)
-            stepF4(state, out)
-          }
-        }
-
+        // Given the entire frontend state, produce:
+        //   - Whether we're done (encountered [ret] or ran off the program)
+        //   - Whether there's an instruction ready
+        //   - What that instruction is, exactly
+        //   - The PC of the instruction that was fetched
+        // and advance the entire pipeline.
         def fetch(state: Rep[Frontend]): (Rep[Boolean], Rep[Boolean], Rep[InstructionS], Rep[Int]) = {
-          // Output of F4
+          // First, gather all phase inputs
 
           // Output of F3
-          val ready = state.instructionOutReady
+          val ready = state.instructionReady
           val result = state.instructionOut
-          val pc = state.fetchPC
+          val pc = state.pcOut
 
-          // Output of F2
+          // Output of F1 and F2
+          // CR cam: We actually need to delay a cycle here
+          val (done, instrAvailable, instr) = loadInstr(state)
+          val nextPC = queryBTB(state)
 
-          // Output of F1
-          val (done, initialFetchReady, initialFetch) = runF1(state)
-          //val (btbFound, btbResponse) =
+          // inputs to F4
+          if (instrAvailable && member(instr.tag, b, beq, bne, bge, blt)) {
+            for (i <- (0 until numSpeculativeBranches): Range) {
+              if (!state.pendingBranchList(i).valid) {
+                state.pendingBranchList(i).pc = pc
+                state.pendingBranchList(i).valid = true
+                state.pendingBranchList(i).target = nextPC
+              }
+            }
+          }
+
+          // inputs to F3
+          state.instructionReady = instrAvailable
+          state.instructionOut = instr
+          state.pcOut = state.fetchPC
+
+          // input to F1
+          // Tentatively, set the fetch head to the predicted next step
+          state.fetchPC = nextPC
+
+          // F1 and F2 write to the
 
           (done, ready, result, pc)
         }
       }
 
-      trait ReorderOps extends Dsl with ROBEntryOps with ROBOps with ArrayOps {
+      trait InterpScheduler extends Dsl with SchedulerOps {
+        def nextScheduled(scheduler: Rep[Scheduler]): (Rep[Boolean], Rep[InstructionS]) = {
+          val ready = scheduler.ready
+          scheduler.ready = false
+          (ready, scheduler.enqueued)
+        }
+
+        // Given an instruction, schedule it. Must be called after [dequeue]
+        def schedule
+          ( scheduler: Rep[Scheduler]
+          , ins: Rep[InstructionS]
+          ): Rep[Unit] =
+        {
+          scheduler.enqueued = ins
+          scheduler.ready = true
+        }
       }
 
-      trait ExecuteOps extends Dsl with InstructionSOps with ArrayOps {
-        def execute(tag: Rep[Int], regFile: Rep[Array[Int]], memory: Rep[Array[Int]]): Rep[Unit] = {
-          if (tag == add) {
+      trait InterpExecute extends ExecuteDsl {
+        def execute(ins: Rep[InstructionS]): Rep[Unit] = {
+          if (ins.tag == add) {
           }
-          else if (tag == addi) {
+          else if (ins.tag == addi) {
           }
-          else if (tag == mul) {
+          else if (ins.tag == mul) {
           }
-          else if (tag == ldr) {
+          else if (ins.tag == ldr) {
           }
-          else if (tag == str) {
+          else if (ins.tag == str) {
           }
-          else if (tag == b) {
+          else if (ins.tag == b) {
           }
-          else if (tag == beq) {
+          else if (ins.tag == beq) {
           }
-          else if (tag == bne) {
+          else if (ins.tag == bne) {
           }
-          else if (tag == blt) {
+          else if (ins.tag == blt) {
           }
-          else if (tag == bge) {
+          else if (ins.tag == bge) {
           }
         }
       }
 
-      trait InterpBoom extends Dsl with StateOps {
-        def run
-          ( initialMemory: Rep[Array[Int]]
-          , allocState: Rep[State]
-          ): Rep[Int] =
-        {
-          var ticks = unit(0)
-
-          while (ticks < 500) {
-            // val done, ready, ins, pc = fetch(state.frontend)
-            // val next = nextScheduled(state.reorder)
-            // val () = execute(next, state.registerFile, state.memory)
-
-            ticks += 1
+      trait InterpALU extends Dsl with ALUOps {
+        def checkALU(alu: Rep[ALU]): (Rep[Boolean], Rep[Int]) = {
+          if (!alu.done && alu.waitCtr == 0) {
+            alu.done = true
+            return (unit(true), alu.result)
           }
 
-          ticks
+          (unit(false), unit(0))
+        }
+
+        def stepALU(alu: Rep[ALU]): Rep[Unit] = {
+          if (alu.done) {
+            return unit(())
+          }
+
+          if (alu.waitCtr > 0) {
+            alu.waitCtr -= 1
+          }
+          else {
+            if (alu.uop == add) {
+              alu.result = alu.vl + alu.vr
+            }
+            else if (alu.uop == addi) {
+              alu.result = alu.vl - alu.vr
+            }
+            else if (alu.uop == mul) {
+              alu.result = alu.vl * alu.vr
+            }
+          }
+        }
+
+        // requires: alu.done
+        def requestUOp
+          ( alu: Rep[ALU]
+          , uop: Rep[Int]
+          , vl: Rep[Int]
+          , vr: Rep[Int]
+          ): Rep[Unit] =
+        {
+          alu.vl = vl
+          alu.vr = vr
+          alu.uop = uop
+
+          if (alu.uop == mul) {
+            alu.waitCtr = 7
+          }
+          else {
+            alu.waitCtr = 0
+          }
+        }
+      }
+
+      trait MemoryUnitDsl extends Dsl
+        with ArrayOps
+        with MemoryUnitOps
+
+      trait InterpMemoryUnit extends MemoryUnitDsl {
+        def checkMemoryLoad(mu: Rep[MemoryUnit]): (Rep[Boolean], Rep[Int]) = {
+          if (!mu.done && !mu.writeRequested && mu.waitCtr == 0) {
+            mu.done = true
+            return (unit(true), mu.bus)
+          }
+
+          (unit(false), unit(0))
+        }
+
+        def stepMU(mu: Rep[MemoryUnit], memory: Rep[Array[Int]]): Rep[Unit] = {
+          if (mu.done) {
+            return unit(())
+          }
+
+          if (mu.waitCtr > 0) {
+            mu.waitCtr -= 1
+          }
+          else {
+            if (mu.writeRequested) {
+              memory(mu.requestedAddr) = mu.bus
+            }
+            else {
+              mu.bus = memory(mu.requestedAddr)
+            }
+          }
+        }
+
+        // requires: mu.done
+        def requestWrite(mu: Rep[MemoryUnit], addr: Rep[Int], v: Rep[Int]): Rep[Unit] = {
+          mu.done = false
+          mu.waitCtr = 10
+          mu.requestedAddr = addr
+          mu.bus = v
+          mu.writeRequested = true
+        }
+
+        // requires: mu.done
+        def requestRead(mu: Rep[MemoryUnit], addr: Rep[Int]): Rep[Unit] = {
+          mu.done = false
+          mu.waitCtr = 10
+          mu.requestedAddr = addr
+          mu.writeRequested = false
+        }
+      }
+
+      trait CommitDsl extends Dsl
+        with InstructionSOps
+        with ArrayOps
+
+      trait InterpCommit extends CommitDsl {
+        def commit(regFile: Rep[Array[Int]], dst: Rep[Int], v: Rep[Int]): Rep[Unit] = {
+          regFile(dst) = v
+        }
+      }
+
+      trait InterpBoom extends StateOps
+        // We assume decode is constant time and thus ignore it.
+        with InterpFrontend
+        with InterpScheduler
+        with InterpMemoryUnit
+        with InterpALU
+        with InterpCommit
+        with InstructionSOps
+      {
+        def run(state: Rep[State]): Rep[State] = {
+          var ticks = __newVar(0)
+          val exit = __newVar(false)
+
+          while (state.ticks < limit && !exit) {
+            state.ticks += 1
+
+            // To ensure that pipeline bubbles are respected, we iterate over
+            // components *backwards*, where the final stage (commit) requests
+            // information from the previous stage (and does nothing if that
+            // stage is not ready). In other words, the pipeline is demand-driven,
+            // with the commit stage pulling information forwards until it
+            // receives the done signal.
+
+            // Commit
+
+            // If something is ready to commit, it is no longer speculative --
+            // a mis-speculated branch must have been detected in the execute
+            // stage, which would have squashed any erroneous to-be-committed
+            // instruction before reaching here.
+            val (memReadReady, readResult) = checkMemoryLoad(state.mu)
+            if (memReadReady) {
+              commit(state.regFile, state.destReg, readResult)
+            }
+            else {
+              val (aluReady, aluResult) = checkALU(state.alu)
+              if (aluReady) {
+                commit(state.regFile, state.destReg, aluResult)
+              }
+            }
+
+            stepMU(state.mu, state.memory)
+            stepALU(state.alu)
+          }
+
+          state
         }
       }
     }
