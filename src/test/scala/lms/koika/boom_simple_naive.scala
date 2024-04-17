@@ -35,6 +35,12 @@ object RiscVStripped {
 class BoomNaiveTests extends TutorialFunSuite {
   val under = "boom_naive_"
 
+  override def exec(label: String, code: String, suffix: String = "c") =
+    super.exec(label, code, suffix)
+
+  override def check(label: String, code: String, suffix: String = "c") =
+    super.check(label, code, suffix)
+
   import RiscVStripped._
 
   // CR cam: Look more deeply into instruction decode. Do we need to track the
@@ -670,13 +676,32 @@ class BoomNaiveTests extends TutorialFunSuite {
   }
 
   abstract class DslDriverX[A:Manifest,B:Manifest] extends DslDriverC[A,B] { q =>
-    val main: String = """
-int main(int argc, char *argv[]) {
-if (argc != 2) {
-  printf("usage: %s <arg>\n", argv[0]);
-  return 0;
+    val header: String = ""
+    val mainBody: String
+
+    def main(): String = s"""
+#ifndef CBMC
+#define __CPROVER_assert(b,s) 0
+#define nondet_uint() 0
+#define __CPROVER_assume(b) 0
+#else
+unsigned int nondet_uint();
+#endif
+int bounded(int low, int high) {
+  int x = nondet_uint();
+  __CPROVER_assume(low <= x && x <= high);
+  return x;
 }
-return 0;
+
+$header
+
+int main(int argc, char *argv[]) {
+  if (argc != 2) {
+    printf("usage: %s <arg>\\n", argv[0]);
+    return 0;
+  }
+
+  $mainBody
 }
 """
 
@@ -707,23 +732,71 @@ Emitting C Generated Code
 End of C Generated Code
 *******************************************/
         """.stripMargin)
-        emit(main)
+        emit(main())
       }
     }
   }
 
   test("1") {
     val runner = new BOOMRunner {
-      override val program = Array()
+      val N = Reg(4)
+      val Temp = Reg(3)
+      val F_n = Reg(2)
+      val F_n_1 = Reg(1)
+      val ZERO = Reg(0)
+      override val program = Array(
+        Addi(F_n, ZERO, 1),
+        Addi(F_n_1, ZERO, 0),
+        Addi(N, ZERO, 15),
+        Addi(Temp, ZERO, 0),
+        Add(Temp, F_n, F_n_1),
+        Add(F_n_1, F_n, ZERO),
+        Add(F_n, Temp, ZERO),
+        Addi(N, N, -1),
+        B(Some(Ne), N, ZERO, -4),
+      )
       override val btbSize: Int = 16
-      override val numArchRegs: Int = 16
-      override val numPhysRegs: Int = 16
+      override val numArchRegs: Int = 8
+      override val numPhysRegs: Int = 8
       override val memSize: Int = 32
       override val limit: Int = 500
     }
-    val snippet = new DslDriverX[State, State] {
+    val snippet = new DslDriverX[State, State] with runner.Interp {
+      override val header = """
+int fact(int i) {
+  __CPROVER_assert(0 <= i, "bad domain (fact)");
+  if (i == 0) { return 1; }
+  return i * fact(i-1);
+}
+"""
+
+      // XXX - this looks terrible
+      val mainBody = """
+  struct StateT state;
+  state.regFile = calloc(8, sizeof(int));
+  state.memory = calloc(32, sizeof(int));
+  state.ticks = 0;
+  state.frontend.btb = calloc(16, sizeof(struct BTBEntry));
+  state.frontend.pendingBranchList = calloc(8, sizeof(struct BTBEntry));
+  state.frontend.fetchPCReady = true;
+  state.frontend.fetchPC = 0;
+  state.alu.done = true;
+  state.mu.done = true;
+  int input = bounded(0, 5);
+  state.regs[0] = input;
+  for (int i = 1; i < 8; i += 1) {
+    state.regFile[i] = 0;
+  }
+  for (int i = 0; i < 32; i += 1) {
+    state.memory[i] = 0;
+  }
+  state = Snippet(state);
+  __CPROVER_assert(state.regFile[2] == fact(input), "correct evaluation");
+  return 0;
+"""
+
       def snippet(inp: Rep[State]): Rep[State] = {
-        inp
+        run(inp)
       }
     }
     check("fact", snippet.code)
