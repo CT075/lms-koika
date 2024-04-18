@@ -1,0 +1,28 @@
+Propagations:
+  # Source functions
+  # The omission of SrcArgs key indicates unconditional taint propagation,
+  # which is conceptually what a source does.
+
+  # Source function
+  #   size_t fread(void *ptr, size_t size, size_t nmemb, FILE * stream)
+  #
+  # Result example:
+  #   FILE* f = fopen("file.txt");
+  #   char buf[1024];
+  #   size_t read = fread(buf, sizeof(buf[0]), sizeof(buf)/sizeof(buf[0]), f);
+  #   // both read and buf are tainted
+  - Name: source
+    DstArgs: [-1]
+
+Sinks:
+  # Sink functions
+  # If taint reaches any of the arguments specified, a warning is emitted.
+
+  # Sink function
+  #   int system(const char* command)
+  #
+  # Result example:
+  #   const char* command = read_command();
+  #   system(command); // emit diagnostic if command is tainted
+  - Name: sink
+    Args: [0]
