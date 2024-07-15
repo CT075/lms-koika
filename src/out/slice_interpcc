@@ -1,0 +1,10 @@
+#!/usr/bin/zsh
+
+# usage: ./slice_interpcc <files>
+
+# TODO: figure out how to get this script to save to file
+for file in $@; do
+    echo "slicing $file"
+    frama-c -slice-wr "s[6]" $file -then-on 'Slicing export' -print
+done
+
