@@ -9,6 +9,16 @@ import lms.collection.mutable._
 
 @virtualize
 class InterpCcHotTest extends TutorialFunSuite {
+  // The existing `interpcc` tests assume that the cache is empty ("cold") at
+  // program start. Realistically, however, snippets do not run in isolation
+  // and it may be infeasible to check programs end-to-end. Checking a "hot"
+  // cache allows us to model an attacker that has primed a cache to have
+  // entries of their choosing.
+
+  // TODO: The abstraction for `set_state_cache` here (particularly the chain
+  // of `InterpCc` traits) is not sufficient to swap out *just* the cache
+  // implementations.
+
   val under = "interpcc_primed_"
 
   override def exec(label: String, code: String, suffix: String = "c") =
@@ -349,7 +359,7 @@ int main(int argc, char* argv[]) {
   }
 
   test("interp 2sctr ni primed") {
-    // TODO: construct a case where hot-cache matters
+    // TODO: construct a simple case where hot-cache matters
     val snippet = new TimedNiDriver with InterpCcRollback {
       override val prog = Vector(Branch(0, 3), Load(1, 0, 0), Load(2, 4, 1))
     }
