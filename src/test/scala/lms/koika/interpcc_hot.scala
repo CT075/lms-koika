@@ -54,6 +54,7 @@ class InterpCcHotTest extends TutorialFunSuite {
 
     abstract sealed class Instruction
     case class Add(rd: Int, rs1: Int, rs2: Int) extends Instruction
+    case class Sub(rd: Int, rs1: Int, rs2: Int) extends Instruction
     case class Branch(rs: Int, target: Int) extends Instruction
     case class Load(rd: Int, im: Int, rs: Int) extends Instruction
     case class Store(rd: Int, im: Int, rs: Int) extends Instruction
@@ -86,6 +87,10 @@ class InterpCcHotTest extends TutorialFunSuite {
       prog(i) match {
         case Add(rd, rs1, rs2) => {
           set_state_reg(s, rd, state_reg(s, rs1) + state_reg(s, rs2))
+          call(i+1, s)
+        }
+        case Sub(rd, rs1, rs2) => {
+          set_state_reg(s, rd, state_reg(s, rs1) - state_reg(s, rs2))
           call(i+1, s)
         }
         case Branch(rs, target) => {
@@ -359,9 +364,21 @@ int main(int argc, char* argv[]) {
   }
 
   test("interp 2sctr ni primed") {
-    // TODO: construct a simple case where hot-cache matters
+    /*
+       if (secret[0] == r0) {
+         r1 = secret[1];
+       }
+       else {
+         r1 = 0;
+       }
+     */
     val snippet = new TimedNiDriver with InterpCcRollback {
-      override val prog = Vector(Branch(0, 3), Load(1, 0, 0), Load(2, 4, 1))
+      override val prog = Vector(
+        Load(1, 10, 2),
+        Sub(0, 0, 1),
+        Branch(0, 3),
+        Load(1, 0, 0),
+        Load(2, 4, 1))
     }
     check("2sctr_ni", snippet.code)
   }
