@@ -12,6 +12,8 @@ libraryDependencies += "org.scala-lang" % "scala-library" % scalaVersion.value %
 
 libraryDependencies += "org.scala-lang" % "scala-reflect" % scalaVersion.value % "compile"
 
+libraryDependencies += "org.scala-lang.modules" %% "scala-parser-combinators" % "1.0.4"
+
 autoCompilerPlugins := true
 
 val paradiseVersion = "2.1.0"
